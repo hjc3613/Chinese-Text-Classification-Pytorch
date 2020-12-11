@@ -28,7 +28,7 @@ def build_vocab(file_path, tokenizer, max_size, min_freq):
     return vocab_dic
 
 
-def build_dataset(config, ues_word):
+def build_dataset(config, ues_word, deploy=False, data_lst=None):
     if ues_word:
         tokenizer = lambda x: x.split(' ')  # 以空格隔开，word-level
     else:
@@ -49,41 +49,57 @@ def build_dataset(config, ues_word):
         t2 = sequence[t - 2] if t - 2 >= 0 else 0
         return (t2 * 14918087 * 18408749 + t1 * 14918087) % buckets
 
+    def processOneSentence(line, pad_size):
+        lin = line.strip()
+        if not lin:
+            return None
+        content, label = lin.split('\t')
+        words_line = []
+        token = tokenizer(content)
+        seq_len = len(token)
+        if pad_size:
+            if len(token) < pad_size:
+                token.extend([PAD] * (pad_size - len(token)))
+            else:
+                token = token[:pad_size]
+                seq_len = pad_size
+        # word to id
+        for word in token:
+            words_line.append(vocab.get(word, vocab.get(UNK)))
+
+        # fasttext ngram
+        buckets = config.n_gram_vocab
+        bigram = []
+        trigram = []
+        # ------ngram------
+        for i in range(pad_size):
+            bigram.append(biGramHash(words_line, i, buckets))
+            trigram.append(triGramHash(words_line, i, buckets))
+
+        return words_line, label, seq_len, bigram, trigram
+
+    def process_sent_list(lst, pad_size=32):
+        contents = []
+        for line in lst:
+            words_line, label, seq_len, bigram, trigram = processOneSentence(line, pad_size)
+            contents.append((words_line, int(label), seq_len, bigram, trigram))
+        return contents
+
     def load_dataset(path, pad_size=32):
         contents = []
         with open(path, 'r', encoding='UTF-8') as f:
             for line in tqdm(f):
-                lin = line.strip()
-                if not lin:
-                    continue
-                content, label = lin.split('\t')
-                words_line = []
-                token = tokenizer(content)
-                seq_len = len(token)
-                if pad_size:
-                    if len(token) < pad_size:
-                        token.extend([PAD] * (pad_size - len(token)))
-                    else:
-                        token = token[:pad_size]
-                        seq_len = pad_size
-                # word to id
-                for word in token:
-                    words_line.append(vocab.get(word, vocab.get(UNK)))
-
-                # fasttext ngram
-                buckets = config.n_gram_vocab
-                bigram = []
-                trigram = []
-                # ------ngram------
-                for i in range(pad_size):
-                    bigram.append(biGramHash(words_line, i, buckets))
-                    trigram.append(triGramHash(words_line, i, buckets))
-                # -----------------
+                words_line, label, seq_len, bigram, trigram = processOneSentence(line, pad_size)
                 contents.append((words_line, int(label), seq_len, bigram, trigram))
         return contents  # [([...], 0), ([...], 1), ...]
-    train = load_dataset(config.train_path, config.pad_size)
-    dev = load_dataset(config.dev_path, config.pad_size)
-    test = load_dataset(config.test_path, config.pad_size)
+    if deploy:
+        to_predict = process_sent_list(data_lst, config.pad_size)
+        return vocab, to_predict, None, None
+        pass
+    else:
+        train = load_dataset(config.train_path, config.pad_size)
+        dev = load_dataset(config.dev_path, config.pad_size)
+        test = load_dataset(config.test_path, config.pad_size)
     return vocab, train, dev, test
 
 
